@@ -2,23 +2,14 @@
 
 """
   用于实现请求
-
-  req = Request()
-  req.enable_proxy()
-  req.set_proxy(key, url)
-  req.enable_cookies()
-  req.set_cookie(key, value)
-  req.set_header(key, value)
-  req.enable_author()
-  req.add_author(user, pass)
-  req.enable_https()
-  req.set_form_data(data)
-  req.set_method(get/post)
-  req.on_request(url)
 """
 
-from urllib import request
+import time
 
+from urllib import request
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
+from concurrent import futures
 
 class SessionImpl(object):
     """
@@ -162,4 +153,94 @@ class Session(SessionImpl):
         req = request.Request(url, data=self.__cache_data, headers=self.__cache_headers, method="POST")
         return self._open(req, timeout, opener=self.__cache_opener)
 
+
+class SessionRunable:
+    """
+    Session多线程/进程执行包装类
+    """
+    def __init__(self):
+        pass
+
+    def run(self, **kwargs):
+        pass
+
+    def exception(self, e):
+        pass
+
+
+class SessionMgr:
+    """
+    支持多线程或者多进程执行Session请求的封装类
+    """
+    def __init__(self, runable_cls, num_of_pool, is_thread=True):
+        """
+        @param runable_cls: 请求的包装类，用于实现外部控制
+        @param num_of_pool: 池的数量，线程or进程
+        @param is_thread: 默认为线程，False则使用进程
+        """
+        if not issubclass(runable_cls, SessionRunable):
+            raise TypeError("runable_cls must be extends from SessionRunable")
+        self.mSessionRunableCls = runable_cls
+        self.mPoolObj = None
+        self.mRunningFlag = False
+        if is_thread:
+            self.mPoolObj = ThreadPoolExecutor(num_of_pool)
+        else:
+            self.mPoolObj = ProcessPoolExecutor(num_of_pool)
+            
+    def _run_impl(self, runable_cls, **kwargs):
+        """ 内部执行方法 """
+        # 先生成对象
+        runable_obj = runable_cls()
+        try:
+            # 执行
+            runable_obj.run(**kwargs)
+        except Exception as e:
+            # 异常反馈
+            runable_obj.exception(e)
+
+    def once(self, num, **kwargs):
+        """
+        单次执行
+        @param num: 同时执行多少个，每个执行完就退出
+        @param kwargs: 外部传给执行类的参数
+        """
+        jobs = []
+        for i in range(num):
+            jobs.append(self.mPoolObj.submit(self._run_impl, self.mSessionRunableCls,**kwargs))
+        futures.wait(jobs)
+        
+    
+    def loop(self, num, **kwargs):
+        """
+        循环执行
+        @param num: 同时执行num个，每个执行完继续执行
+        @param kwargs: 外部传给执行类的参数
+        """
+        self.mRunningFlag = True
+        enable_task_num = num
+        jobs = []
+        while self.mRunningFlag:
+            for i in range(enable_task_num):
+                jobs.append(self.mPoolObj.submit(self._run_impl, self.mSessionRunableCls, **kwargs))
+            print("JOBS::", jobs, self.mRunningFlag)
+            enable_task_num = 0
+            while self.mRunningFlag and enable_task_num == 0:
+                temp_done_jobs = []
+                for job in jobs:
+                    if job.done():
+                        enable_task_num += 1
+                        temp_done_jobs.append(job)
+                # 都没有完成就等待
+                if enable_task_num == 0:
+                    time.sleep(1)
+                # 移除已完成的
+                for job in temp_done_jobs:
+                    jobs.remove(job)
+
+    def cancel(self):
+        """
+        取消循环的执行
+        """
+        self.mRunningFlag = False
 
