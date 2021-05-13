@@ -4,12 +4,15 @@
   用于实现请求
 """
 
+import sys
 import time
+import inspect
 
 from urllib import request
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import ProcessPoolExecutor
 from concurrent import futures
+
 
 class SessionImpl(object):
     """
@@ -168,6 +171,49 @@ class SessionRunable:
         pass
 
 
+def _run_thread_impl(runable_cls, **kwargs):
+    """
+    线程执行包装
+    """
+    # 先生成对象
+    runable_obj = runable_cls()
+    try:
+        # 执行
+        runable_obj.run(**kwargs)
+    except Exception as e:
+        # 异常反馈
+        runable_obj.exception(e)
+
+
+def get_class_from_module(module_name, class_name):
+    cls_list = inspect.getmembers(module_name, inspect.isclass)
+    for name, _ in cls_list:
+        if name == class_name:
+            return 
+
+def _run_process_impl(run_cls_name, run_cls_module, **kwargs):
+    """
+    进程执行包装，由于进程启动不能像线程那样可以传递对象
+    """
+    try:
+        # 非专业实现...
+        # 先根据模块名找到对应的模块
+        # 然后根据类名获取类
+        # 最后创建类对象
+        runable_module = sys.modules[run_cls_module]
+        runable_cls  = getattr(runable_module, run_cls_name)
+        runable_obj = runable_cls()
+        try:
+            # 执行
+            runable_obj.run(**kwargs)
+        except Exception as e:
+            # 异常反馈
+            runable_obj.exception(e)
+    except Exception as e:
+        # 这个理论上没人看得到。。。
+        print("[process] error:{0}".format(e))
+
+
 class SessionMgr:
     """
     支持多线程或者多进程执行Session请求的封装类
@@ -183,21 +229,11 @@ class SessionMgr:
         self.mSessionRunableCls = runable_cls
         self.mPoolObj = None
         self.mRunningFlag = False
+        self.mIsThreadMode = is_thread
         if is_thread:
             self.mPoolObj = ThreadPoolExecutor(num_of_pool)
         else:
             self.mPoolObj = ProcessPoolExecutor(num_of_pool)
-            
-    def _run_impl(self, runable_cls, **kwargs):
-        """ 内部执行方法 """
-        # 先生成对象
-        runable_obj = runable_cls()
-        try:
-            # 执行
-            runable_obj.run(**kwargs)
-        except Exception as e:
-            # 异常反馈
-            runable_obj.exception(e)
 
     def once(self, num, **kwargs):
         """
@@ -206,8 +242,20 @@ class SessionMgr:
         @param kwargs: 外部传给执行类的参数
         """
         jobs = []
+        # 区分线程和进程的启动方式
+        if self.mIsThreadMode:
+            _run_impl = _run_thread_impl
+            _run_cls = self.mSessionRunableCls
+        else:
+            _run_impl = _run_process_impl
+            _run_cls = self.mSessionRunableCls.__name__
+            _run_mod = self.mSessionRunableCls.__module__
+
         for i in range(num):
-            jobs.append(self.mPoolObj.submit(self._run_impl, self.mSessionRunableCls,**kwargs))
+            if self.mIsThreadMode:
+                jobs.append(self.mPoolObj.submit(_run_impl, _run_cls, **kwargs))
+            else:
+                jobs.append(self.mPoolObj.submit(_run_impl, _run_cls, _run_mod, **kwargs))
         futures.wait(jobs)
         
     
@@ -220,10 +268,21 @@ class SessionMgr:
         self.mRunningFlag = True
         enable_task_num = num
         jobs = []
+        # 区分线程和进程的启动方式
+        if self.mIsThreadMode:
+            _run_impl = _run_thread_impl
+            _run_cls = self.mSessionRunableCls
+        else:
+            _run_impl = _run_process_impl
+            _run_cls = self.mSessionRunableCls.__name__
+            _run_mod = self.mSessionRunableCls.__module__
+
         while self.mRunningFlag:
             for i in range(enable_task_num):
-                jobs.append(self.mPoolObj.submit(self._run_impl, self.mSessionRunableCls, **kwargs))
-            print("JOBS::", jobs, self.mRunningFlag)
+                if self.mIsThreadMode:
+                    jobs.append(self.mPoolObj.submit(_run_impl, _run_cls, **kwargs))
+                else:
+                    jobs.append(self.mPoolObj.submit(_run_impl, _run_cls, _run_mod, **kwargs))
             enable_task_num = 0
             while self.mRunningFlag and enable_task_num == 0:
                 temp_done_jobs = []
@@ -237,10 +296,4 @@ class SessionMgr:
                 # 移除已完成的
                 for job in temp_done_jobs:
                     jobs.remove(job)
-
-    def cancel(self):
-        """
-        取消循环的执行
-        """
-        self.mRunningFlag = False
 
