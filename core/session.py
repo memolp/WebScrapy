@@ -184,13 +184,6 @@ def _run_thread_impl(runable_cls, **kwargs):
         # 异常反馈
         runable_obj.exception(e)
 
-
-def get_class_from_module(module_name, class_name):
-    cls_list = inspect.getmembers(module_name, inspect.isclass)
-    for name, _ in cls_list:
-        if name == class_name:
-            return 
-
 def _run_process_impl(run_cls_name, run_cls_module, **kwargs):
     """
     进程执行包装，由于进程启动不能像线程那样可以传递对象

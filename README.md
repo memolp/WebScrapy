@@ -30,6 +30,8 @@ except Exception as e:
 #### 多线程/多进程
 ```python
 import core
+# 必须继承自SessionRunable,并且每个线程或进程**每次执行都会创建新的这个对象**去执行
+# run方法中执行请求逻辑
 class MySessionAble(core.SessionRunable):
     def run(self):
         session = core.Session()
